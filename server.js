@@ -3,26 +3,31 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
-
-const authRoutes = require("./routes/auth");
 const { initializeDatabase } = require("./config/database");
+
+// Import routes
+const apiRoutes = require("./routes");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Security middleware
 app.use(helmet());
-app.use(
-  cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    credentials: true,
-  })
-);
+
+// CORS config
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? process.env.FRONTEND_URL 
+    : true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 100,
   message: "Quá nhiều requests từ IP này, vui lòng thử lại sau.",
 });
 app.use(limiter);
@@ -31,8 +36,12 @@ app.use(limiter);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Routes
-app.use("/api/auth", authRoutes);
+// API Routes - Tất cả routes sẽ có prefix /api
+app.use("/api", apiRoutes);
+// app.use("/api/users", userRoutes);
+// app.use("/api/posts", postRoutes);
+// app.use("/api/comments", commentRoutes);
+// app.use("/api/admin", adminRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {
@@ -40,41 +49,79 @@ app.get("/health", (req, res) => {
     status: "OK",
     message: "Server đang hoạt động",
     timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    port: PORT,
+    version: "1.0.0"
   });
 });
 
-// Root endpoint
+// API Documentation endpoint
 app.get("/", (req, res) => {
   res.json({
     message: "API Node.js Authentication Server",
     version: "1.0.0",
-    endpoints: {
-      auth: {
-        register: "POST /api/auth/register",
-        login: "POST /api/auth/login",
-        profile: "GET /api/auth/profile",
-        refresh: "POST /api/auth/refresh",
-      },
-    },
+    environment: process.env.NODE_ENV || 'development',
+    documentation: {
+      health: "GET /health",
+      endpoints: {
+        auth: {
+          register: "POST /api/auth/register",
+          login: "POST /api/auth/login", 
+          profile: "GET /api/auth/profile",
+          refresh: "POST /api/auth/refresh",
+          logout: "POST /api/auth/logout"
+        },
+        // users: {
+        //   getAllUsers: "GET /api/users",
+        //   getUserById: "GET /api/users/:id",
+        //   updateUser: "PUT /api/users/:id",
+        //   deleteUser: "DELETE /api/users/:id"
+        // },
+        // posts: {
+        //   getAllPosts: "GET /api/posts",
+        //   getPostById: "GET /api/posts/:id",
+        //   createPost: "POST /api/posts",
+        //   updatePost: "PUT /api/posts/:id",
+        //   deletePost: "DELETE /api/posts/:id"
+        // }
+      }
+    }
   });
 });
 
-// Error handling middleware
+// Global error handling middleware
 app.use((err, req, res, next) => {
-  console.error("Error:", err.stack);
-
+  console.error("Global Error Handler:", {
+    error: err.message,
+    stack: err.stack,
+    url: req.originalUrl,
+    method: req.method,
+    timestamp: new Date().toISOString()
+  });
+  
   res.status(err.status || 500).json({
     error: true,
     message: err.message || "Đã xảy ra lỗi server",
-    ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
+    ...(process.env.NODE_ENV === "development" && { 
+      stack: err.stack,
+      url: req.originalUrl,
+      method: req.method 
+    }),
   });
 });
 
-// 404 handler
+// 404 handler - Phải đặt cuối cùng
 app.use("*", (req, res) => {
   res.status(404).json({
     error: true,
     message: "Endpoint không tồn tại",
+    requestedPath: req.originalUrl,
+    method: req.method,
+    availableEndpoints: {
+      health: "GET /health",
+      documentation: "GET /",
+      auth: "GET|POST /api/auth/*"
+    }
   });
 });
 
@@ -83,11 +130,17 @@ const startServer = async () => {
   try {
     await initializeDatabase();
     console.log("✅ Database initialized successfully");
-
+    
     app.listen(PORT, () => {
       console.log(`🚀 Server đang chạy trên port ${PORT}`);
       console.log(`📍 URL: http://localhost:${PORT}`);
       console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+      console.log(`📚 API Documentation: http://localhost:${PORT}/`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🔐 Available routes:`);
+      console.log(`   - Auth: /api/auth/*`);
+      // console.log(`   - Users: /api/users/*`);
+      // console.log(`   - Posts: /api/posts/*`);
     });
   } catch (error) {
     console.error("❌ Lỗi khi khởi động server:", error);
