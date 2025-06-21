@@ -123,7 +123,8 @@ router.post("/register", async (req, res) => {
       [newUser.id, refreshToken, expiresAt]
     );
 
-    res.status(201).json({
+    // IMPORTANT: Return response and end the function here
+    return res.status(201).json({
       success: true,
       message: "Đăng ký thành công",
       data: {
@@ -142,7 +143,16 @@ router.post("/register", async (req, res) => {
     });
   } catch (error) {
     console.error("Register error:", error);
-    res.status(500).json({
+    
+    // Check for specific database errors
+    if (error.code === '23505') { // Unique constraint violation
+      return res.status(409).json({
+        error: true,
+        message: "Email hoặc username đã tồn tại",
+      });
+    }
+    
+    return res.status(500).json({
       error: true,
       message: "Lỗi server khi đăng ký",
     });
@@ -212,7 +222,7 @@ router.post("/login", authLimiter, async (req, res) => {
       [user.id, refreshToken, expiresAt]
     );
 
-    res.json({
+    return res.json({
       success: true,
       message: "Đăng nhập thành công",
       data: {
@@ -231,7 +241,7 @@ router.post("/login", authLimiter, async (req, res) => {
     });
   } catch (error) {
     console.error("Login error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       error: true,
       message: "Lỗi server khi đăng nhập",
     });
@@ -253,7 +263,7 @@ router.get("/profile", authenticateToken, async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         user: result.rows[0],
@@ -261,7 +271,7 @@ router.get("/profile", authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error("Profile error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       error: true,
       message: "Lỗi server khi lấy thông tin profile",
     });
@@ -327,7 +337,7 @@ router.post("/refresh", async (req, res) => {
       [user.id, newRefreshToken, expiresAt]
     );
 
-    res.json({
+    return res.json({
       success: true,
       message: "Token đã được làm mới",
       data: {
@@ -339,7 +349,7 @@ router.post("/refresh", async (req, res) => {
     });
   } catch (error) {
     console.error("Refresh token error:", error);
-    res.status(401).json({
+    return res.status(401).json({
       error: true,
       message: "Refresh token không hợp lệ",
     });
@@ -359,13 +369,13 @@ router.post("/logout", authenticateToken, async (req, res) => {
       );
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: "Đăng xuất thành công",
     });
   } catch (error) {
     console.error("Logout error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       error: true,
       message: "Lỗi server khi đăng xuất",
     });
