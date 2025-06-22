@@ -5,7 +5,33 @@ require('dotenv').config();
 // Cấu hình kết nối PostgreSQL từ environment variables
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  ssl: process.env.NODE_ENV === 'production' 
+    ? { rejectUnauthorized: false } 
+    : false,
+  // Thêm các options để tăng độ ổn định
+  max: 20, // Số lượng connection tối đa trong pool
+  idleTimeoutMillis: 30000, // Thời gian timeout cho idle connections
+  connectionTimeoutMillis: 2000, // Thời gian timeout cho việc tạo connection
+  // Retry logic
+  retryDelay: 1000,
+  maxRetries: 3,
+});
+
+// Event listeners để debug connection issues
+pool.on('connect', (client) => {
+  console.log('✅ New client connected to PostgreSQL');
+});
+
+pool.on('error', (err, client) => {
+  console.error('❌ Unexpected error on idle client', err);
+});
+
+pool.on('acquire', (client) => {
+  console.log('🔗 Client acquired from pool');
+});
+
+pool.on('release', (client) => {
+  console.log('🔓 Client released back to pool');
 });
 
 console.log("✅ Connected to PostgreSQL database");
@@ -234,6 +260,19 @@ const revokeAllUserSessions = async (userId) => {
   }
 };
 
+// Helper function để parse user agent
+const parseUserAgent = (userAgentString) => {
+  const ua = useragent.parse(userAgentString || '');
+  return {
+    browser: ua.browser || 'Unknown',
+    os: ua.os || 'Unknown',
+    platform: ua.platform || 'Unknown',
+    isMobile: ua.isMobile,
+    isDesktop: ua.isDesktop,
+    isTablet: ua.isTablet
+  };
+};
+
 // Helper function để tạo session mới
 const createUserSession = async (userId, sessionData) => {
   const {
@@ -248,13 +287,19 @@ const createUserSession = async (userId, sessionData) => {
     userAgent
   } = sessionData;
 
+  // Parse user agent nếu có
+  let parsedUA = { browser, os };
+  if (userAgent) {
+    parsedUA = parseUserAgent(userAgent);
+  }
+
   try {
     const result = await query(
       `INSERT INTO user_sessions 
        (user_id, session_token, refresh_token, expires_at, device_type, device_name, browser, os, ip_address, user_agent) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id`,
-      [userId, sessionToken, refreshToken, expiresAt, deviceType, deviceName, browser, os, ipAddress, userAgent]
+      [userId, sessionToken, refreshToken, expiresAt, deviceType, deviceName, parsedUA.browser, parsedUA.os, ipAddress, userAgent]
     );
     
     console.log(`✅ Created new session for user ${userId}`);
@@ -370,4 +415,5 @@ module.exports = {
   validateSession,
   refreshUserSession,
   updateSessionTokens,
+  parseUserAgent,
 };

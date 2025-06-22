@@ -5,13 +5,13 @@ const validator = require("validator");
 const rateLimit = require("express-rate-limit");
 const crypto = require("crypto");
 const useragent = require("express-useragent");
-
 const {
   query,
   run,
   revokeAllUserSessions,
   createUserSession,
   validateSession,
+  parseUserAgent,
 } = require("../config/database");
 
 const router = express.Router();
@@ -19,149 +19,177 @@ const router = express.Router();
 // Middleware để parse user agent
 router.use(useragent.express());
 
-// Rate limiting cho auth endpoints
+// Rate limiting
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 requests per windowMs
+  max: 5, // 5 attempts per IP per window
   message: {
-    error: true,
-    message: "Quá nhiều lần thử đăng nhập, vui lòng thử lại sau 15 phút",
+    error: "Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau 15 phút.",
+    code: "TOO_MANY_ATTEMPTS"
   },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-// Rate limiting cho register
 const registerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3, // Limit each IP to 3 registration attempts per hour
+  max: 3, // 3 registrations per IP per hour
   message: {
-    error: true,
-    message: "Quá nhiều lần đăng ký, vui lòng thử lại sau 1 giờ",
+    error: "Quá nhiều lần đăng ký. Vui lòng thử lại sau 1 giờ.",
+    code: "TOO_MANY_REGISTRATIONS"
   },
 });
 
-// Validation helper
-const validateInput = (data, type) => {
-  const errors = [];
-
-  if (type === "register") {
-    if (!data.email || !validator.isEmail(data.email)) {
-      errors.push("Email không hợp lệ");
-    }
-    if (
-      !data.username ||
-      data.username.length < 3 ||
-      data.username.length > 30
-    ) {
-      errors.push("Username phải có từ 3-30 ký tự");
-    }
-    if (!/^[a-zA-Z0-9_]+$/.test(data.username)) {
-      errors.push("Username chỉ được chứa chữ cái, số và dấu gạch dưới");
-    }
-    if (!data.password || data.password.length < 8) {
-      errors.push("Mật khẩu phải có ít nhất 8 ký tự");
-    }
-    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(data.password)) {
-      errors.push(
-        "Mật khẩu phải chứa ít nhất 1 chữ hoa, 1 chữ thường và 1 chữ số"
-      );
-    }
-    if (!data.full_name || data.full_name.trim().length < 2) {
-      errors.push("Họ tên phải có ít nhất 2 ký tự");
-    }
-    if (data.phone && !validator.isMobilePhone(data.phone, "vi-VN")) {
-      errors.push("Số điện thoại không hợp lệ");
-    }
-  }
-
-  if (type === "login") {
-    if (!data.identifier) {
-      errors.push("Email hoặc username không được để trống");
-    }
-    if (!data.password) {
-      errors.push("Mật khẩu không được để trống");
-    }
-  }
-
-  return errors;
-};
-
-// Generate JWT tokens
-const generateTokens = (user, sessionId) => {
-  const payload = {
-    userId: user.id,
-    email: user.email,
-    username: user.username,
-    role: user.role || "user",
-    sessionId: sessionId,
-  };
-
-  const accessToken = jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || "1h",
-  });
-
-  const refreshToken = jwt.sign(
-    { ...payload, type: "refresh" },
-    process.env.JWT_REFRESH_SECRET,
-    {
-      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "7d",
-    }
+// Helper functions
+const generateTokens = (userId) => {
+  const sessionToken = jwt.sign(
+    { userId, type: 'session' },
+    process.env.JWT_SECRET,
+    { expiresIn: '7d' }
   );
-
-  return { accessToken, refreshToken };
+  
+  const refreshToken = jwt.sign(
+    { userId, type: 'refresh' },
+    process.env.JWT_REFRESH_SECRET,
+    { expiresIn: '30d' }
+  );
+  
+  return { sessionToken, refreshToken };
 };
 
-// Helper function để extract device info
-const extractDeviceInfo = (req) => {
-  const ua = req.useragent;
-  return {
-    deviceType: ua.isMobile ? "mobile" : ua.isTablet ? "tablet" : "web",
-    deviceName: ua.source.match(/\(([^)]+)\)/)?.[1] || "Unknown Device",
-    browser: ua.browser || "Unknown",
-    os: ua.os || "Unknown",
-    ipAddress: req.ip || req.connection.remoteAddress || "Unknown",
-    userAgent: req.get("User-Agent") || "Unknown",
-  };
-};
-
-// Log login attempt
-const logLoginAttempt = async (req, emailOrUsername, success) => {
+const logLoginAttempt = async (ipAddress, emailOrUsername, success, userAgent) => {
   try {
     await run(
-      "INSERT INTO user_login_attempts (ip_address, email_or_username, success, user_agent) VALUES (?, ?, ?, ?)",
-      [req.ip, emailOrUsername, success ? 1 : 0, req.get("User-Agent")]
+      `INSERT INTO user_login_attempts 
+       (ip_address, email_or_username, success, user_agent) 
+       VALUES ($1, $2, $3, $4)`,
+      [ipAddress, emailOrUsername, success, userAgent]
     );
   } catch (error) {
     console.error("Error logging login attempt:", error);
   }
 };
 
-// POST /api/auth/register
+const validatePassword = (password) => {
+  if (password.length < 8) {
+    return "Mật khẩu phải có ít nhất 8 ký tự";
+  }
+  if (!/(?=.*[a-z])/.test(password)) {
+    return "Mật khẩu phải có ít nhất 1 chữ thường";
+  }
+  if (!/(?=.*[A-Z])/.test(password)) {
+    return "Mật khẩu phải có ít nhất 1 chữ hoa";
+  }
+  if (!/(?=.*\d)/.test(password)) {
+    return "Mật khẩu phải có ít nhất 1 số";
+  }
+  if (!/(?=.*[@$!%*?&])/.test(password)) {
+    return "Mật khẩu phải có ít nhất 1 ký tự đặc biệt";
+  }
+  return null;
+};
+
+// ĐĂNG KÝ
 router.post("/register", registerLimiter, async (req, res) => {
   try {
-    const { email, username, password, full_name, phone, address, city } =
-      req.body;
+    const {
+      email,
+      username,
+      password,
+      confirmPassword,
+      fullName,
+      phone,
+      address,
+      city,
+      district,
+      ward,
+      postalCode
+    } = req.body;
 
-    // Validate input
-    const errors = validateInput(req.body, "register");
-    if (errors.length > 0) {
+    // Validation
+    if (!email || !username || !password || !confirmPassword || !fullName) {
       return res.status(400).json({
-        error: true,
-        message: "Dữ liệu không hợp lệ",
-        errors,
+        success: false,
+        error: "Vui lòng điền đầy đủ thông tin bắt buộc",
+        code: "MISSING_REQUIRED_FIELDS"
       });
     }
 
-    // Check if user already exists
+    // Validate email
+    if (!validator.isEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        error: "Email không hợp lệ",
+        code: "INVALID_EMAIL"
+      });
+    }
+
+    // Validate username
+    if (username.length < 3 || username.length > 50) {
+      return res.status(400).json({
+        success: false,
+        error: "Tên đăng nhập phải từ 3-50 ký tự",
+        code: "INVALID_USERNAME_LENGTH"
+      });
+    }
+
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      return res.status(400).json({
+        success: false,
+        error: "Tên đăng nhập chỉ được chứa chữ cái, số và dấu gạch dưới",
+        code: "INVALID_USERNAME_FORMAT"
+      });
+    }
+
+    // Validate password
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      return res.status(400).json({
+        success: false,
+        error: passwordError,
+        code: "INVALID_PASSWORD"
+      });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        error: "Mật khẩu xác nhận không khớp",
+        code: "PASSWORD_MISMATCH"
+      });
+    }
+
+    // Validate phone if provided
+    if (phone && !validator.isMobilePhone(phone, 'vi-VN')) {
+      return res.status(400).json({
+        success: false,
+        error: "Số điện thoại không hợp lệ",
+        code: "INVALID_PHONE"
+      });
+    }
+
+    // Check if email or username already exists
     const existingUser = await query(
-      "SELECT id FROM users WHERE email = ? OR username = ? OR phone = ?",
-      [email.toLowerCase(), username.toLowerCase(), phone]
+      "SELECT email, username FROM users WHERE email = $1 OR username = $2",
+      [email.toLowerCase(), username.toLowerCase()]
     );
 
     if (existingUser.rows.length > 0) {
-      return res.status(409).json({
-        error: true,
-        message: "Email, username hoặc số điện thoại đã tồn tại",
-      });
+      const existing = existingUser.rows[0];
+      if (existing.email === email.toLowerCase()) {
+        return res.status(409).json({
+          success: false,
+          error: "Email đã được sử dụng",
+          code: "EMAIL_EXISTS"
+        });
+      }
+      if (existing.username === username.toLowerCase()) {
+        return res.status(409).json({
+          success: false,
+          error: "Tên đăng nhập đã được sử dụng",
+          code: "USERNAME_EXISTS"
+        });
+      }
     }
 
     // Hash password
@@ -169,54 +197,62 @@ router.post("/register", registerLimiter, async (req, res) => {
     const passwordHash = await bcrypt.hash(password, saltRounds);
 
     // Generate verification token
-    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const verificationToken = crypto.randomBytes(32).toString('hex');
 
-    // Insert new user
-    const result = await run(
-      `INSERT INTO users (email, username, password_hash, full_name, phone, address, city, verification_token) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?) 
+    // Create user
+    const result = await query(
+      `INSERT INTO users 
+       (email, username, password_hash, full_name, phone, address, city, district, ward, postal_code, verification_token)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING id, email, username, full_name, role, created_at`,
       [
         email.toLowerCase(),
         username.toLowerCase(),
         passwordHash,
-        full_name.trim(),
+        fullName,
         phone || null,
         address || null,
         city || null,
-        verificationToken,
+        district || null,
+        ward || null,
+        postalCode || null,
+        verificationToken
       ]
     );
 
-    // Get the created user
-    const userResult = await query(
-      "SELECT id, email, username, full_name, role, created_at FROM users WHERE id = ?",
-      [result.lastID]
-    );
+    const newUser = result.rows[0];
 
-    const newUser = userResult.rows[0];
+    // Generate tokens
+    const { sessionToken, refreshToken } = generateTokens(newUser.id);
 
-    // Generate session token
-    const sessionToken = crypto.randomBytes(32).toString("hex");
+    // Parse user agent
+    const userAgentData = parseUserAgent(req.headers['user-agent']);
+    const ipAddress = req.ip || req.connection.remoteAddress;
 
-    // Generate JWT tokens
-    const { accessToken, refreshToken } = generateTokens(newUser, sessionToken);
-
-    // Get device info
-    const deviceInfo = extractDeviceInfo(req);
-
-    // Create user session (single session - revoke all previous sessions)
-    await revokeAllUserSessions(newUser.id);
+    // Create session
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-
     await createUserSession(newUser.id, {
       sessionToken,
       refreshToken,
-      expiresAt: expiresAt.toISOString(),
-      ...deviceInfo,
+      expiresAt,
+      deviceType: userAgentData.isMobile ? 'mobile' : userAgentData.isTablet ? 'tablet' : 'web',
+      deviceName: userAgentData.platform,
+      browser: userAgentData.browser,
+      os: userAgentData.os,
+      ipAddress,
+      userAgent: req.headers['user-agent']
     });
 
-    return res.status(201).json({
+    // Update last login
+    await run(
+      "UPDATE users SET last_login = NOW(), last_activity = NOW() WHERE id = $1",
+      [newUser.id]
+    );
+
+    // Log successful registration
+    await logLoginAttempt(ipAddress, email, true, req.headers['user-agent']);
+
+    res.status(201).json({
       success: true,
       message: "Đăng ký thành công",
       data: {
@@ -224,119 +260,118 @@ router.post("/register", registerLimiter, async (req, res) => {
           id: newUser.id,
           email: newUser.email,
           username: newUser.username,
-          full_name: newUser.full_name,
+          fullName: newUser.full_name,
           role: newUser.role,
-          created_at: newUser.created_at,
+          createdAt: newUser.created_at
         },
         tokens: {
-          accessToken,
+          sessionToken,
           refreshToken,
-          tokenType: "Bearer",
-        },
-      },
+          expiresAt
+        }
+      }
     });
+
   } catch (error) {
-    console.error("Register error:", error);
-
-    if (error.code === "SQLITE_CONSTRAINT") {
-      return res.status(409).json({
-        error: true,
-        message: "Email, username hoặc số điện thoại đã tồn tại",
-      });
-    }
-
-    return res.status(500).json({
-      error: true,
-      message: "Lỗi server khi đăng ký",
+    console.error("Registration error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Đã xảy ra lỗi trong quá trình đăng ký",
+      code: "INTERNAL_ERROR"
     });
   }
 });
 
-// POST /api/auth/login
+// ĐĂNG NHẬP
 router.post("/login", authLimiter, async (req, res) => {
   try {
-    const { identifier, password, remember_me = false } = req.body;
+    const { emailOrUsername, password, rememberMe = false } = req.body;
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
 
-    // Validate input
-    const errors = validateInput(req.body, "login");
-    if (errors.length > 0) {
-      await logLoginAttempt(req, identifier, false);
+    // Validation
+    if (!emailOrUsername || !password) {
       return res.status(400).json({
-        error: true,
-        message: "Dữ liệu không hợp lệ",
-        errors,
+        success: false,
+        error: "Vui lòng nhập email/tên đăng nhập và mật khẩu",
+        code: "MISSING_CREDENTIALS"
       });
     }
 
     // Find user by email or username
-    const result = await query(
-      "SELECT * FROM users WHERE email = ? OR username = ?",
-      [identifier.toLowerCase(), identifier.toLowerCase()]
+    const userResult = await query(
+      `SELECT id, email, username, password_hash, full_name, role, is_active, is_verified, 
+              phone, avatar_url, shop_name, seller_rating, last_login
+       FROM users 
+       WHERE (email = $1 OR username = $1) AND is_active = TRUE`,
+      [emailOrUsername.toLowerCase()]
     );
 
-    if (result.rows.length === 0) {
-      await logLoginAttempt(req, identifier, false);
+    if (userResult.rows.length === 0) {
+      await logLoginAttempt(ipAddress, emailOrUsername, false, userAgent);
       return res.status(401).json({
-        error: true,
-        message: "Email/username hoặc mật khẩu không đúng",
+        success: false,
+        error: "Email/tên đăng nhập hoặc mật khẩu không chính xác",
+        code: "INVALID_CREDENTIALS"
       });
     }
 
-    const user = result.rows[0];
-
-    // Check if user is active
-    if (!user.is_active) {
-      await logLoginAttempt(req, identifier, false);
-      return res.status(401).json({
-        error: true,
-        message: "Tài khoản đã bị vô hiệu hóa",
-      });
-    }
+    const user = userResult.rows[0];
 
     // Verify password
-    const validPassword = await bcrypt.compare(password, user.password_hash);
-    if (!validPassword) {
-      await logLoginAttempt(req, identifier, false);
+    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+    if (!isValidPassword) {
+      await logLoginAttempt(ipAddress, emailOrUsername, false, userAgent);
       return res.status(401).json({
-        error: true,
-        message: "Email/username hoặc mật khẩu không đúng",
+        success: false,
+        error: "Email/tên đăng nhập hoặc mật khẩu không chính xác",
+        code: "INVALID_CREDENTIALS"
       });
     }
 
-    // Log successful login attempt
-    await logLoginAttempt(req, identifier, true);
+    // Check if account is active
+    if (!user.is_active) {
+      await logLoginAttempt(ipAddress, emailOrUsername, false, userAgent);
+      return res.status(403).json({
+        success: false,
+        error: "Tài khoản đã bị vô hiệu hóa",
+        code: "ACCOUNT_DISABLED"
+      });
+    }
 
-    // Update last login and activity
-    await run(
-      "UPDATE users SET last_login = datetime('now'), last_activity = datetime('now') WHERE id = ?",
-      [user.id]
-    );
-
-    // SINGLE SESSION: Revoke all existing sessions
+    // Revoke all existing sessions (single session login)
     await revokeAllUserSessions(user.id);
 
-    // Generate new session token
-    const sessionToken = crypto.randomBytes(32).toString("hex");
+    // Generate new tokens
+    const { sessionToken, refreshToken } = generateTokens(user.id);
 
-    // Generate JWT tokens
-    const { accessToken, refreshToken } = generateTokens(user, sessionToken);
-
-    // Get device info
-    const deviceInfo = extractDeviceInfo(req);
+    // Parse user agent
+    const userAgentData = parseUserAgent(userAgent);
 
     // Create new session
-    const expiresAt = new Date(
-      Date.now() + (remember_me ? 30 : 7) * 24 * 60 * 60 * 1000
-    );
-
+    const expiresAt = new Date(Date.now() + (rememberMe ? 30 : 7) * 24 * 60 * 60 * 1000);
     await createUserSession(user.id, {
       sessionToken,
       refreshToken,
-      expiresAt: expiresAt.toISOString(),
-      ...deviceInfo,
+      expiresAt,
+      deviceType: userAgentData.isMobile ? 'mobile' : userAgentData.isTablet ? 'tablet' : 'web',
+      deviceName: userAgentData.platform,
+      browser: userAgentData.browser,
+      os: userAgentData.os,
+      ipAddress,
+      userAgent
     });
 
-    return res.json({
+    // Update last login and activity
+    await run(
+      "UPDATE users SET last_login = NOW(), last_activity = NOW() WHERE id = $1",
+      [user.id]
+    );
+
+    // Log successful login
+    await logLoginAttempt(ipAddress, emailOrUsername, true, userAgent);
+
+    res.json({
       success: true,
       message: "Đăng nhập thành công",
       data: {
@@ -344,241 +379,243 @@ router.post("/login", authLimiter, async (req, res) => {
           id: user.id,
           email: user.email,
           username: user.username,
-          full_name: user.full_name,
+          fullName: user.full_name,
           role: user.role,
-          avatar_url: user.avatar_url,
-          is_verified: user.is_verified,
-          last_login: new Date().toISOString(),
+          isVerified: user.is_verified,
+          phone: user.phone,
+          avatarUrl: user.avatar_url,
+          shopName: user.shop_name,
+          sellerRating: user.seller_rating,
+          lastLogin: user.last_login
         },
         tokens: {
-          accessToken,
+          sessionToken,
           refreshToken,
-          tokenType: "Bearer",
-          expiresIn: process.env.JWT_EXPIRES_IN || "1h",
-        },
-      },
+          expiresAt
+        }
+      }
     });
+
   } catch (error) {
     console.error("Login error:", error);
-    return res.status(500).json({
-      error: true,
-      message: "Lỗi server khi đăng nhập",
+    res.status(500).json({
+      success: false,
+      error: "Đã xảy ra lỗi trong quá trình đăng nhập",
+      code: "INTERNAL_ERROR"
     });
   }
 });
 
-// Middleware để authenticate Bearer token
-const authenticateToken = async (req, res, next) => {
+// ĐĂNG XUẤT
+router.post("/logout", async (req, res) => {
   try {
-    const authHeader = req.headers["authorization"];
-    const token =
-      authHeader && authHeader.startsWith("Bearer ")
-        ? authHeader.substring(7)
-        : null;
-
-    if (!token) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
-        error: true,
-        message: "Access token không được cung cấp",
+        success: false,
+        error: "Token không hợp lệ",
+        code: "INVALID_TOKEN"
       });
     }
 
-    // Verify JWT token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const token = authHeader.substring(7);
+    const session = await validateSession(token);
 
-    // Validate session in database
-    const session = await validateSession(decoded.sessionId);
-
-    if (!session) {
-      return res.status(401).json({
-        error: true,
-        message: "Session không hợp lệ hoặc đã hết hạn",
-      });
+    if (session) {
+      // Revoke current session
+      await run(
+        "UPDATE user_sessions SET is_active = FALSE WHERE session_token = $1",
+        [token]
+      );
     }
 
-    // Attach user info to request
-    req.user = {
-      userId: session.user_id,
-      email: session.email,
-      username: session.username,
-      role: session.role,
-      sessionId: decoded.sessionId,
-    };
-
-    next();
-  } catch (error) {
-    console.error("Auth token error:", error);
-    return res.status(401).json({
-      error: true,
-      message: "Token không hợp lệ",
-    });
-  }
-};
-
-// GET /api/auth/profile
-router.get("/profile", authenticateToken, async (req, res) => {
-  try {
-    const result = await query(
-      `SELECT id, email, username, full_name, phone, avatar_url, address, city, district, ward, 
-              role, is_verified, is_seller_verified, shop_name, seller_rating, seller_reviews_count,
-              created_at, last_login, last_activity 
-       FROM users WHERE id = ?`,
-      [req.user.userId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        error: true,
-        message: "Người dùng không tồn tại",
-      });
-    }
-
-    return res.json({
+    res.json({
       success: true,
-      data: {
-        user: result.rows[0],
-      },
+      message: "Đăng xuất thành công"
     });
+
   } catch (error) {
-    console.error("Profile error:", error);
-    return res.status(500).json({
-      error: true,
-      message: "Lỗi server khi lấy thông tin profile",
+    console.error("Logout error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Đã xảy ra lỗi trong quá trình đăng xuất",
+      code: "INTERNAL_ERROR"
     });
   }
 });
 
-// POST /api/auth/refresh
+// REFRESH TOKEN
 router.post("/refresh", async (req, res) => {
   try {
     const { refreshToken } = req.body;
 
     if (!refreshToken) {
       return res.status(401).json({
-        error: true,
-        message: "Refresh token không được cung cấp",
+        success: false,
+        error: "Refresh token không được cung cấp",
+        code: "MISSING_REFRESH_TOKEN"
       });
     }
 
     // Verify refresh token
     const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-
-    if (decoded.type !== "refresh") {
-      return res.status(401).json({
-        error: true,
-        message: "Token không hợp lệ",
-      });
-    }
-
-    // Check if session exists and is active
+    
+    // Find session with refresh token
     const sessionResult = await query(
-      `SELECT us.*, u.id as user_id, u.email, u.username, u.role 
-       FROM user_sessions us 
-       JOIN users u ON us.user_id = u.id 
-       WHERE us.refresh_token = ? AND us.is_active = 1 AND us.expires_at > datetime('now') AND u.is_active = 1`,
+      `SELECT us.*, u.id as user_id, u.email, u.username, u.role, u.is_active
+       FROM user_sessions us
+       JOIN users u ON us.user_id = u.id
+       WHERE us.refresh_token = $1 AND us.is_active = TRUE AND us.expires_at > NOW() AND u.is_active = TRUE`,
       [refreshToken]
     );
 
     if (sessionResult.rows.length === 0) {
       return res.status(401).json({
-        error: true,
-        message: "Refresh token không hợp lệ hoặc đã hết hạn",
+        success: false,
+        error: "Refresh token không hợp lệ",
+        code: "INVALID_REFRESH_TOKEN"
       });
     }
 
     const session = sessionResult.rows[0];
-    const user = {
-      id: session.user_id,
-      email: session.email,
-      username: session.username,
-      role: session.role,
-    };
 
     // Generate new tokens
-    const { accessToken, refreshToken: newRefreshToken } = generateTokens(
-      user,
-      session.session_token
-    );
+    const { sessionToken: newSessionToken, refreshToken: newRefreshToken } = generateTokens(session.user_id);
 
-    // Update session with new refresh token
+    // Update session with new tokens
+    const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     await run(
-      "UPDATE user_sessions SET refresh_token = ?, last_used = datetime('now') WHERE id = ?",
-      [newRefreshToken, session.id]
+      `UPDATE user_sessions 
+       SET session_token = $1, refresh_token = $2, expires_at = $3, last_used = NOW()
+       WHERE id = $4`,
+      [newSessionToken, newRefreshToken, newExpiresAt, session.id]
     );
 
-    return res.json({
+    res.json({
       success: true,
       message: "Token đã được làm mới",
       data: {
         tokens: {
-          accessToken,
+          sessionToken: newSessionToken,
           refreshToken: newRefreshToken,
-          tokenType: "Bearer",
-          expiresIn: process.env.JWT_EXPIRES_IN || "1h",
-        },
-      },
+          expiresAt: newExpiresAt
+        }
+      }
     });
+
   } catch (error) {
-    console.error("Refresh token error:", error);
-    return res.status(401).json({
-      error: true,
-      message: "Refresh token không hợp lệ",
+    console.error("Token refresh error:", error);
+    res.status(401).json({
+      success: false,
+      error: "Refresh token không hợp lệ",
+      code: "INVALID_REFRESH_TOKEN"
     });
   }
 });
 
-// POST /api/auth/logout
-router.post("/logout", authenticateToken, async (req, res) => {
+// MIDDLEWARE AUTHENTICATION
+const authenticateToken = async (req, res, next) => {
   try {
-    // Revoke current session
-    await run(
-      "UPDATE user_sessions SET is_active = 0 WHERE session_token = ? AND user_id = ?",
-      [req.user.sessionId, req.user.userId]
-    );
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        error: "Token không được cung cấp",
+        code: "MISSING_TOKEN"
+      });
+    }
 
-    return res.json({
-      success: true,
-      message: "Đăng xuất thành công",
-    });
+    const token = authHeader.substring(7);
+    const session = await validateSession(token);
+
+    if (!session) {
+      return res.status(401).json({
+        success: false,
+        error: "Token không hợp lệ hoặc đã hết hạn",
+        code: "INVALID_TOKEN"
+      });
+    }
+
+    // Add user info to request
+    req.user = {
+      id: session.user_id,
+      email: session.email,
+      username: session.username,
+      role: session.role
+    };
+
+    next();
   } catch (error) {
-    console.error("Logout error:", error);
-    return res.status(500).json({
-      error: true,
-      message: "Lỗi server khi đăng xuất",
+    console.error("Authentication error:", error);
+    res.status(401).json({
+      success: false,
+      error: "Token không hợp lệ",
+      code: "INVALID_TOKEN"
     });
   }
-});
+};
 
-// GET /api/auth/sessions - List all active sessions (for user to manage)
-router.get("/sessions", authenticateToken, async (req, res) => {
+// GET USER PROFILE
+router.get("/profile", authenticateToken, async (req, res) => {
   try {
-    const result = await query(
-      `SELECT id, device_type, device_name, browser, os, ip_address, 
-              created_at, last_used, session_token 
-       FROM user_sessions 
-       WHERE user_id = ? AND is_active = 1 AND expires_at > datetime('now')
-       ORDER BY last_used DESC`,
-      [req.user.userId]
+    const userResult = await query(
+      `SELECT id, email, username, full_name, phone, avatar_url, address, city, district, ward, postal_code,
+              role, is_verified, is_seller_verified, shop_name, shop_description, seller_rating, seller_reviews_count,
+              total_orders, total_spent, created_at, last_login
+       FROM users 
+       WHERE id = $1 AND is_active = TRUE`,
+      [req.user.id]
     );
 
-    const sessions = result.rows.map((session) => ({
-      ...session,
-      is_current: session.session_token === req.user.sessionId,
-    }));
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Người dùng không tồn tại",
+        code: "USER_NOT_FOUND"
+      });
+    }
 
-    return res.json({
+    const user = userResult.rows[0];
+
+    res.json({
       success: true,
       data: {
-        sessions,
-      },
+        user: {
+          id: user.id,
+          email: user.email,
+          username: user.username,
+          fullName: user.full_name,
+          phone: user.phone,
+          avatarUrl: user.avatar_url,
+          address: user.address,
+          city: user.city,
+          district: user.district,
+          ward: user.ward,
+          postalCode: user.postal_code,
+          role: user.role,
+          isVerified: user.is_verified,
+          isSellerVerified: user.is_seller_verified,
+          shopName: user.shop_name,
+          shopDescription: user.shop_description,
+          sellerRating: user.seller_rating,
+          sellerReviewsCount: user.seller_reviews_count,
+          totalOrders: user.total_orders,
+          totalSpent: user.total_spent,
+          createdAt: user.created_at,
+          lastLogin: user.last_login
+        }
+      }
     });
+
   } catch (error) {
-    console.error("Sessions error:", error);
-    return res.status(500).json({
-      error: true,
-      message: "Lỗi server khi lấy danh sách sessions",
+    console.error("Get profile error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Đã xảy ra lỗi khi lấy thông tin người dùng",
+      code: "INTERNAL_ERROR"
     });
   }
 });
 
-module.exports = router;
+module.exports = { router, authenticateToken };

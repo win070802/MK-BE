@@ -1,20 +1,31 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
 
-// Import individual route modules
-const authRoutes = require('./auth');
-// Mount routes with their respective prefixes
-router.use('/auth', authRoutes);
+// Import auth routes
+const { router: authRouter, authenticateToken } = require("./auth");
 
-// API info endpoint
-router.get('/', (req, res) => {
+// Mount auth routes
+router.use("/auth", authRouter);
+
+// Test endpoint
+router.get("/test", (req, res) => {
   res.json({
-    message: 'API Routes Available',
-    version: '1.0.0',
-    routes: {
-      auth: '/api/auth',
-    }
+    success: true,
+    message: "API Routes đang hoạt động",
+    timestamp: new Date().toISOString(),
   });
 });
 
+// Protected test endpoint
+router.get("/protected-test", authenticateToken, (req, res) => {
+  res.json({
+    success: true,
+    message: "Protected endpoint đang hoạt động",
+    user: req.user,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Export router và middleware
 module.exports = router;
+module.exports.authenticateToken = authenticateToken;
