@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "migrate": "node migrations/001_update_users_table.js"
+    "migrate": "node migrations/migrate.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -14,10 +14,11 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5",
+    "express-useragent": "^1.0.15",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.11.3",
-    "sqlite3": "^5.1.7",
+    "sqlite3": "^5.1.7", 
     "validator": "^13.11.0"
   },
   "devDependencies": {
@@ -33,6 +34,6 @@
     "railway",
     "postgresql"
   ],
-  "author": "Your Name",
+  "author": "Tran Minh Khoi",
   "license": "MIT"
 }

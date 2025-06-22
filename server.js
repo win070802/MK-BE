@@ -4,7 +4,6 @@ const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { initializeDatabase } = require("./config/database");
-const { runMigration } = require('./migrations/001_update_users_table');
 
 // Import routes
 const apiRoutes = require("./routes");
@@ -16,14 +15,15 @@ const PORT = process.env.PORT || 3000;
 app.use(helmet());
 
 // CORS config
-app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? process.env.FRONTEND_URL 
-    : true,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+app.use(
+  cors({
+    origin:
+      process.env.NODE_ENV === "production" ? process.env.FRONTEND_URL : true,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
 // Rate limiting
 const limiter = rateLimit({
@@ -39,10 +39,6 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // API Routes - Tất cả routes sẽ có prefix /api
 app.use("/api", apiRoutes);
-// app.use("/api/users", userRoutes);
-// app.use("/api/posts", postRoutes);
-// app.use("/api/comments", commentRoutes);
-// app.use("/api/admin", adminRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {
@@ -50,9 +46,9 @@ app.get("/health", (req, res) => {
     status: "OK",
     message: "Server đang hoạt động",
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
+    environment: process.env.NODE_ENV || "development",
     port: PORT,
-    version: "1.0.0"
+    version: "1.0.0",
   });
 });
 
@@ -61,32 +57,19 @@ app.get("/", (req, res) => {
   res.json({
     message: "API Node.js Authentication Server",
     version: "1.0.0",
-    environment: process.env.NODE_ENV || 'development',
+    environment: process.env.NODE_ENV || "development",
     documentation: {
       health: "GET /health",
       endpoints: {
         auth: {
           register: "POST /api/auth/register",
-          login: "POST /api/auth/login", 
+          login: "POST /api/auth/login",
           profile: "GET /api/auth/profile",
           refresh: "POST /api/auth/refresh",
-          logout: "POST /api/auth/logout"
+          logout: "POST /api/auth/logout",
         },
-        // users: {
-        //   getAllUsers: "GET /api/users",
-        //   getUserById: "GET /api/users/:id",
-        //   updateUser: "PUT /api/users/:id",
-        //   deleteUser: "DELETE /api/users/:id"
-        // },
-        // posts: {
-        //   getAllPosts: "GET /api/posts",
-        //   getPostById: "GET /api/posts/:id",
-        //   createPost: "POST /api/posts",
-        //   updatePost: "PUT /api/posts/:id",
-        //   deletePost: "DELETE /api/posts/:id"
-        // }
-      }
-    }
+      },
+    },
   });
 });
 
@@ -97,16 +80,16 @@ app.use((err, req, res, next) => {
     stack: err.stack,
     url: req.originalUrl,
     method: req.method,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
-  
+
   res.status(err.status || 500).json({
     error: true,
     message: err.message || "Đã xảy ra lỗi server",
-    ...(process.env.NODE_ENV === "development" && { 
+    ...(process.env.NODE_ENV === "development" && {
       stack: err.stack,
       url: req.originalUrl,
-      method: req.method 
+      method: req.method,
     }),
   });
 });
@@ -121,8 +104,8 @@ app.use("*", (req, res) => {
     availableEndpoints: {
       health: "GET /health",
       documentation: "GET /",
-      auth: "GET|POST /api/auth/*"
-    }
+      auth: "GET|POST /api/auth/*",
+    },
   });
 });
 
@@ -131,13 +114,13 @@ const startServer = async () => {
   try {
     await initializeDatabase();
     console.log("✅ Database initialized successfully");
-    
+
     app.listen(PORT, () => {
       console.log(`🚀 Server đang chạy trên port ${PORT}`);
       console.log(`📍 URL: http://localhost:${PORT}`);
       console.log(`🏥 Health check: http://localhost:${PORT}/health`);
       console.log(`📚 API Documentation: http://localhost:${PORT}/`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
       console.log(`🔐 Available routes:`);
       console.log(`   - Auth: /api/auth/*`);
     });

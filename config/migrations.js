@@ -234,6 +234,19 @@ const revokeAllUserSessions = async (userId) => {
   }
 };
 
+// Helper function để parse user agent
+const parseUserAgent = (userAgentString) => {
+  const ua = useragent.parse(userAgentString || '');
+  return {
+    browser: ua.browser || 'Unknown',
+    os: ua.os || 'Unknown',
+    platform: ua.platform || 'Unknown',
+    isMobile: ua.isMobile,
+    isDesktop: ua.isDesktop,
+    isTablet: ua.isTablet
+  };
+};
+
 // Helper function để tạo session mới
 const createUserSession = async (userId, sessionData) => {
   const {
@@ -248,13 +261,19 @@ const createUserSession = async (userId, sessionData) => {
     userAgent
   } = sessionData;
 
+  // Parse user agent nếu có
+  let parsedUA = { browser, os };
+  if (userAgent) {
+    parsedUA = parseUserAgent(userAgent);
+  }
+
   try {
     const result = await query(
       `INSERT INTO user_sessions 
        (user_id, session_token, refresh_token, expires_at, device_type, device_name, browser, os, ip_address, user_agent) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id`,
-      [userId, sessionToken, refreshToken, expiresAt, deviceType, deviceName, browser, os, ipAddress, userAgent]
+      [userId, sessionToken, refreshToken, expiresAt, deviceType, deviceName, parsedUA.browser, parsedUA.os, ipAddress, userAgent]
     );
     
     console.log(`✅ Created new session for user ${userId}`);

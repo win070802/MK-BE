@@ -6,12 +6,12 @@ const rateLimit = require("express-rate-limit");
 const crypto = require("crypto");
 const useragent = require("express-useragent");
 
-const { 
-  query, 
-  run, 
-  revokeAllUserSessions, 
-  createUserSession, 
-  validateSession 
+const {
+  query,
+  run,
+  revokeAllUserSessions,
+  createUserSession,
+  validateSession,
 } = require("../config/database");
 
 const router = express.Router();
@@ -25,7 +25,7 @@ const authLimiter = rateLimit({
   max: 5, // Limit each IP to 5 requests per windowMs
   message: {
     error: true,
-    message: "Quá nhiều lần thử đăng nhập, vui lòng thử lại sau 15 phút"
+    message: "Quá nhiều lần thử đăng nhập, vui lòng thử lại sau 15 phút",
   },
 });
 
@@ -35,7 +35,7 @@ const registerLimiter = rateLimit({
   max: 3, // Limit each IP to 3 registration attempts per hour
   message: {
     error: true,
-    message: "Quá nhiều lần đăng ký, vui lòng thử lại sau 1 giờ"
+    message: "Quá nhiều lần đăng ký, vui lòng thử lại sau 1 giờ",
   },
 });
 
@@ -47,7 +47,11 @@ const validateInput = (data, type) => {
     if (!data.email || !validator.isEmail(data.email)) {
       errors.push("Email không hợp lệ");
     }
-    if (!data.username || data.username.length < 3 || data.username.length > 30) {
+    if (
+      !data.username ||
+      data.username.length < 3 ||
+      data.username.length > 30
+    ) {
       errors.push("Username phải có từ 3-30 ký tự");
     }
     if (!/^[a-zA-Z0-9_]+$/.test(data.username)) {
@@ -57,12 +61,14 @@ const validateInput = (data, type) => {
       errors.push("Mật khẩu phải có ít nhất 8 ký tự");
     }
     if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(data.password)) {
-      errors.push("Mật khẩu phải chứa ít nhất 1 chữ hoa, 1 chữ thường và 1 chữ số");
+      errors.push(
+        "Mật khẩu phải chứa ít nhất 1 chữ hoa, 1 chữ thường và 1 chữ số"
+      );
     }
     if (!data.full_name || data.full_name.trim().length < 2) {
       errors.push("Họ tên phải có ít nhất 2 ký tự");
     }
-    if (data.phone && !validator.isMobilePhone(data.phone, 'vi-VN')) {
+    if (data.phone && !validator.isMobilePhone(data.phone, "vi-VN")) {
       errors.push("Số điện thoại không hợp lệ");
     }
   }
@@ -85,8 +91,8 @@ const generateTokens = (user, sessionId) => {
     userId: user.id,
     email: user.email,
     username: user.username,
-    role: user.role || 'user',
-    sessionId: sessionId
+    role: user.role || "user",
+    sessionId: sessionId,
   };
 
   const accessToken = jwt.sign(payload, process.env.JWT_SECRET, {
@@ -94,8 +100,8 @@ const generateTokens = (user, sessionId) => {
   });
 
   const refreshToken = jwt.sign(
-    { ...payload, type: 'refresh' }, 
-    process.env.JWT_REFRESH_SECRET, 
+    { ...payload, type: "refresh" },
+    process.env.JWT_REFRESH_SECRET,
     {
       expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "7d",
     }
@@ -108,12 +114,12 @@ const generateTokens = (user, sessionId) => {
 const extractDeviceInfo = (req) => {
   const ua = req.useragent;
   return {
-    deviceType: ua.isMobile ? 'mobile' : ua.isTablet ? 'tablet' : 'web',
-    deviceName: ua.source.match(/\(([^)]+)\)/)?.[1] || 'Unknown Device',
-    browser: ua.browser || 'Unknown',
-    os: ua.os || 'Unknown',
-    ipAddress: req.ip || req.connection.remoteAddress || 'Unknown',
-    userAgent: req.get('User-Agent') || 'Unknown'
+    deviceType: ua.isMobile ? "mobile" : ua.isTablet ? "tablet" : "web",
+    deviceName: ua.source.match(/\(([^)]+)\)/)?.[1] || "Unknown Device",
+    browser: ua.browser || "Unknown",
+    os: ua.os || "Unknown",
+    ipAddress: req.ip || req.connection.remoteAddress || "Unknown",
+    userAgent: req.get("User-Agent") || "Unknown",
   };
 };
 
@@ -122,7 +128,7 @@ const logLoginAttempt = async (req, emailOrUsername, success) => {
   try {
     await run(
       "INSERT INTO user_login_attempts (ip_address, email_or_username, success, user_agent) VALUES (?, ?, ?, ?)",
-      [req.ip, emailOrUsername, success ? 1 : 0, req.get('User-Agent')]
+      [req.ip, emailOrUsername, success ? 1 : 0, req.get("User-Agent")]
     );
   } catch (error) {
     console.error("Error logging login attempt:", error);
@@ -132,7 +138,8 @@ const logLoginAttempt = async (req, emailOrUsername, success) => {
 // POST /api/auth/register
 router.post("/register", registerLimiter, async (req, res) => {
   try {
-    const { email, username, password, full_name, phone, address, city } = req.body;
+    const { email, username, password, full_name, phone, address, city } =
+      req.body;
 
     // Validate input
     const errors = validateInput(req.body, "register");
@@ -162,7 +169,7 @@ router.post("/register", registerLimiter, async (req, res) => {
     const passwordHash = await bcrypt.hash(password, saltRounds);
 
     // Generate verification token
-    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationToken = crypto.randomBytes(32).toString("hex");
 
     // Insert new user
     const result = await run(
@@ -177,7 +184,7 @@ router.post("/register", registerLimiter, async (req, res) => {
         phone || null,
         address || null,
         city || null,
-        verificationToken
+        verificationToken,
       ]
     );
 
@@ -190,8 +197,8 @@ router.post("/register", registerLimiter, async (req, res) => {
     const newUser = userResult.rows[0];
 
     // Generate session token
-    const sessionToken = crypto.randomBytes(32).toString('hex');
-    
+    const sessionToken = crypto.randomBytes(32).toString("hex");
+
     // Generate JWT tokens
     const { accessToken, refreshToken } = generateTokens(newUser, sessionToken);
 
@@ -201,12 +208,12 @@ router.post("/register", registerLimiter, async (req, res) => {
     // Create user session (single session - revoke all previous sessions)
     await revokeAllUserSessions(newUser.id);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-    
+
     await createUserSession(newUser.id, {
       sessionToken,
       refreshToken,
       expiresAt: expiresAt.toISOString(),
-      ...deviceInfo
+      ...deviceInfo,
     });
 
     return res.status(201).json({
@@ -224,20 +231,20 @@ router.post("/register", registerLimiter, async (req, res) => {
         tokens: {
           accessToken,
           refreshToken,
-          tokenType: 'Bearer'
+          tokenType: "Bearer",
         },
       },
     });
   } catch (error) {
     console.error("Register error:", error);
-    
-    if (error.code === 'SQLITE_CONSTRAINT') {
+
+    if (error.code === "SQLITE_CONSTRAINT") {
       return res.status(409).json({
         error: true,
         message: "Email, username hoặc số điện thoại đã tồn tại",
       });
     }
-    
+
     return res.status(500).json({
       error: true,
       message: "Lỗi server khi đăng ký",
@@ -309,8 +316,8 @@ router.post("/login", authLimiter, async (req, res) => {
     await revokeAllUserSessions(user.id);
 
     // Generate new session token
-    const sessionToken = crypto.randomBytes(32).toString('hex');
-    
+    const sessionToken = crypto.randomBytes(32).toString("hex");
+
     // Generate JWT tokens
     const { accessToken, refreshToken } = generateTokens(user, sessionToken);
 
@@ -318,13 +325,15 @@ router.post("/login", authLimiter, async (req, res) => {
     const deviceInfo = extractDeviceInfo(req);
 
     // Create new session
-    const expiresAt = new Date(Date.now() + (remember_me ? 30 : 7) * 24 * 60 * 60 * 1000);
-    
+    const expiresAt = new Date(
+      Date.now() + (remember_me ? 30 : 7) * 24 * 60 * 60 * 1000
+    );
+
     await createUserSession(user.id, {
       sessionToken,
       refreshToken,
       expiresAt: expiresAt.toISOString(),
-      ...deviceInfo
+      ...deviceInfo,
     });
 
     return res.json({
@@ -344,8 +353,8 @@ router.post("/login", authLimiter, async (req, res) => {
         tokens: {
           accessToken,
           refreshToken,
-          tokenType: 'Bearer',
-          expiresIn: process.env.JWT_EXPIRES_IN || "1h"
+          tokenType: "Bearer",
+          expiresIn: process.env.JWT_EXPIRES_IN || "1h",
         },
       },
     });
@@ -361,10 +370,11 @@ router.post("/login", authLimiter, async (req, res) => {
 // Middleware để authenticate Bearer token
 const authenticateToken = async (req, res, next) => {
   try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.startsWith('Bearer ') 
-      ? authHeader.substring(7) 
-      : null;
+    const authHeader = req.headers["authorization"];
+    const token =
+      authHeader && authHeader.startsWith("Bearer ")
+        ? authHeader.substring(7)
+        : null;
 
     if (!token) {
       return res.status(401).json({
@@ -378,7 +388,7 @@ const authenticateToken = async (req, res, next) => {
 
     // Validate session in database
     const session = await validateSession(decoded.sessionId);
-    
+
     if (!session) {
       return res.status(401).json({
         error: true,
@@ -392,7 +402,7 @@ const authenticateToken = async (req, res, next) => {
       email: session.email,
       username: session.username,
       role: session.role,
-      sessionId: decoded.sessionId
+      sessionId: decoded.sessionId,
     };
 
     next();
@@ -453,7 +463,7 @@ router.post("/refresh", async (req, res) => {
     // Verify refresh token
     const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
 
-    if (decoded.type !== 'refresh') {
+    if (decoded.type !== "refresh") {
       return res.status(401).json({
         error: true,
         message: "Token không hợp lệ",
@@ -481,11 +491,14 @@ router.post("/refresh", async (req, res) => {
       id: session.user_id,
       email: session.email,
       username: session.username,
-      role: session.role
+      role: session.role,
     };
 
     // Generate new tokens
-    const { accessToken, refreshToken: newRefreshToken } = generateTokens(user, session.session_token);
+    const { accessToken, refreshToken: newRefreshToken } = generateTokens(
+      user,
+      session.session_token
+    );
 
     // Update session with new refresh token
     await run(
@@ -500,8 +513,8 @@ router.post("/refresh", async (req, res) => {
         tokens: {
           accessToken,
           refreshToken: newRefreshToken,
-          tokenType: 'Bearer',
-          expiresIn: process.env.JWT_EXPIRES_IN || "1h"
+          tokenType: "Bearer",
+          expiresIn: process.env.JWT_EXPIRES_IN || "1h",
         },
       },
     });
@@ -548,15 +561,15 @@ router.get("/sessions", authenticateToken, async (req, res) => {
       [req.user.userId]
     );
 
-    const sessions = result.rows.map(session => ({
+    const sessions = result.rows.map((session) => ({
       ...session,
-      is_current: session.session_token === req.user.sessionId
+      is_current: session.session_token === req.user.sessionId,
     }));
 
     return res.json({
       success: true,
       data: {
-        sessions
+        sessions,
       },
     });
   } catch (error) {
@@ -568,4 +581,4 @@ router.get("/sessions", authenticateToken, async (req, res) => {
   }
 });
 
-module.exports = { router, authenticateToken };
+module.exports = router;
