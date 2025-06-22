@@ -130,37 +130,23 @@ const optionalAuth = async (req, res, next) => {
   }
 };
 
-// Admin role check middleware
-const requireAdmin = async (req, res, next) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({
-        error: true,
-        message: 'Yêu cầu đăng nhập'
-      });
-    }
-    
-    const result = await query(
-      'SELECT role FROM users WHERE id = $1',
-      [req.user.userId]
-    );
-    
-    if (result.rows.length === 0 || result.rows[0].role !== 'admin') {
-      return res.status(403).json({
-        error: true,
-        message: 'Không có quyền truy cập'
-      });
-    }
-    
-    next();
-    
-  } catch (error) {
-    console.error('Admin check error:', error);
-    res.status(500).json({
+// Middleware to require admin role
+const requireAdmin = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
       error: true,
-      message: 'Lỗi server khi kiểm tra quyền admin'
+      message: "Token không hợp lệ",
     });
   }
+
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({
+      error: true,
+      message: "Không có quyền truy cập",
+    });
+  }
+
+  next();
 };
 
 // Rate limiting per user

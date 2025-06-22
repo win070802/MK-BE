@@ -1,54 +1,25 @@
 const express = require('express');
 const { query } = require('../config/database');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/users - Lấy danh sách users (admin only)
-router.get('/', authenticateToken, async (req, res) => {
+// GET /api/users - Get all users (admin only)
+router.get('/', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { page = 1, limit = 10, search = '' } = req.query;
-    const offset = (page - 1) * limit;
-
-    let whereClause = '';
-    let queryParams = [limit, offset];
-    
-    if (search) {
-      whereClause = 'WHERE username ILIKE $3 OR email ILIKE $3 OR full_name ILIKE $3';
-      queryParams.push(`%${search}%`);
-    }
-
     const result = await query(
-      `SELECT id, email, username, full_name, is_active, is_verified, created_at, last_login 
+      `SELECT id, email, username, full_name, role, is_active, is_verified, 
+       created_at, last_login 
        FROM users 
-       ${whereClause}
-       ORDER BY created_at DESC 
-       LIMIT $1 OFFSET $2`,
-      queryParams
+       ORDER BY created_at DESC`
     );
-
-    // Count total users
-    const countResult = await query(
-      `SELECT COUNT(*) as total FROM users ${whereClause}`,
-      search ? [`%${search}%`] : []
-    );
-
-    const total = parseInt(countResult.rows[0].total);
-    const totalPages = Math.ceil(total / limit);
 
     return res.json({
       success: true,
       data: {
         users: result.rows,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total,
-          totalPages,
-          hasNext: page < totalPages,
-          hasPrev: page > 1
-        }
-      }
+        total: result.rows.length,
+      },
     });
   } catch (error) {
     console.error('Get users error:', error);
@@ -59,28 +30,31 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
-// GET /api/users/:id - Lấy thông tin user theo ID
-router.get('/:id', authenticateToken, async (req, res) => {
+// GET /api/users/:id - Get user by ID (admin only)
+router.get('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
     const result = await query(
-      'SELECT id, email, username, full_name, is_active, is_verified, created_at, last_login FROM users WHERE id = $1',
+      `SELECT id, email, username, full_name, role, is_active, is_verified, 
+       created_at, last_login 
+       FROM users 
+       WHERE id = $1`,
       [id]
     );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
         error: true,
-        message: 'User không tồn tại'
+        message: 'Người dùng không tồn tại'
       });
     }
 
     return res.json({
       success: true,
       data: {
-        user: result.rows[0]
-      }
+        user: result.rows[0],
+      },
     });
   } catch (error) {
     console.error('Get user error:', error);
@@ -91,38 +65,45 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// PUT /api/users/:id - Cập nhật thông tin user
-router.put('/:id', authenticateToken, async (req, res) => {
+// PUT /api/users/:id - Update user (admin only)
+router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { full_name, is_active } = req.body;
+    const { full_name, role, is_active, is_verified } = req.body;
 
-    // Chỉ cho phép user cập nhật thông tin của chính mình hoặc admin
-    if (req.user.userId !== parseInt(id) && !req.user.isAdmin) {
-      return res.status(403).json({
+    // Validate role
+    if (role && !['user', 'admin'].includes(role)) {
+      return res.status(400).json({
         error: true,
-        message: 'Không có quyền cập nhật thông tin user này'
+        message: 'Role không hợp lệ'
       });
     }
 
     const result = await query(
-      'UPDATE users SET full_name = $1, is_active = $2 WHERE id = $3 RETURNING id, email, username, full_name, is_active',
-      [full_name, is_active, id]
+      `UPDATE users 
+       SET full_name = COALESCE($1, full_name),
+           role = COALESCE($2, role),
+           is_active = COALESCE($3, is_active),
+           is_verified = COALESCE($4, is_verified),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $5
+       RETURNING id, email, username, full_name, role, is_active, is_verified, created_at, last_login`,
+      [full_name, role, is_active, is_verified, id]
     );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
         error: true,
-        message: 'User không tồn tại'
+        message: 'Người dùng không tồn tại'
       });
     }
 
     return res.json({
       success: true,
-      message: 'Cập nhật thành công',
+      message: 'Cập nhật user thành công',
       data: {
-        user: result.rows[0]
-      }
+        user: result.rows[0],
+      },
     });
   } catch (error) {
     console.error('Update user error:', error);
@@ -133,28 +114,28 @@ router.put('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// DELETE /api/users/:id - Xóa user (soft delete)
-router.delete('/:id', authenticateToken, async (req, res) => {
+// DELETE /api/users/:id - Delete user (admin only)
+router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Chỉ admin mới có thể xóa user
-    if (!req.user.isAdmin) {
-      return res.status(403).json({
+    // Prevent admin from deleting themselves
+    if (parseInt(id) === req.user.userId) {
+      return res.status(400).json({
         error: true,
-        message: 'Không có quyền xóa user'
+        message: 'Không thể xóa tài khoản của chính mình'
       });
     }
 
     const result = await query(
-      'UPDATE users SET is_active = false WHERE id = $1 RETURNING id',
+      'DELETE FROM users WHERE id = $1 RETURNING id',
       [id]
     );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
         error: true,
-        message: 'User không tồn tại'
+        message: 'Người dùng không tồn tại'
       });
     }
 

@@ -4,6 +4,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { initializeDatabase } = require("./config/database");
+const { runMigration } = require('./migrations/001_update_users_table');
 
 // Import routes
 const apiRoutes = require("./routes");
@@ -139,8 +140,6 @@ const startServer = async () => {
       console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🔐 Available routes:`);
       console.log(`   - Auth: /api/auth/*`);
-      // console.log(`   - Users: /api/users/*`);
-      // console.log(`   - Posts: /api/posts/*`);
     });
   } catch (error) {
     console.error("❌ Lỗi khi khởi động server:", error);
